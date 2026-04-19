@@ -240,6 +240,11 @@ function getLocation() {
   });
 }
 
+const isIOS = typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+const defaultFacing = isIOS ? "environment" : "user";
+
 export default function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -247,7 +252,7 @@ export default function App() {
   const [mode, setMode] = useState("camera");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
-  const [facing, setFacing] = useState("user");
+  const [facing, setFacing] = useState(defaultFacing);
   const [photoDataUrl, setPhotoDataUrl] = useState(null);
   const [weather, setWeather] = useState(null);
   const [emojis, setEmojis] = useState([]);
@@ -257,7 +262,7 @@ export default function App() {
   const [videoReady, setVideoReady] = useState(false);
 
   useEffect(() => {
-    startCamera("user");
+    startCamera(defaultFacing);
     return () => stopCamera();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -298,10 +303,18 @@ export default function App() {
     setPhotoDataUrl(null);
     setVideoReady(false);
     try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: nextFacing, width: { ideal: 1440 }, height: { ideal: 1920 } },
-        audio: false
-      });
+      let s;
+      try {
+        s = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: nextFacing }, width: { ideal: 1440 }, height: { ideal: 1920 } },
+          audio: false
+        });
+      } catch {
+        s = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: nextFacing, width: { ideal: 1440 }, height: { ideal: 1920 } },
+          audio: false
+        });
+      }
       streamRef.current = s;
       if (videoRef.current) videoRef.current.srcObject = s;
       setFacing(nextFacing);

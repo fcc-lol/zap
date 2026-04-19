@@ -4,7 +4,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCameraRotate,
   faRotateLeft,
-  faDownload,
+  faArrowUpFromBracket,
   faCloudArrowUp
 } from "@fortawesome/free-solid-svg-icons";
 
@@ -512,13 +512,26 @@ export default function App() {
     }
   }
 
-  function download() {
+  async function share() {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.92));
+    if (!blob) return;
+    const filename = `zap-${Date.now()}.jpg`;
+    const file = new File([blob], filename, { type: "image/jpeg" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (e) {
+        if (e?.name === "AbortError") return;
+      }
+    }
     const link = document.createElement("a");
-    link.download = `zap-${Date.now()}.jpg`;
-    link.href = canvas.toDataURL("image/jpeg", 0.92);
+    link.download = filename;
+    link.href = URL.createObjectURL(blob);
     link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   }
 
   async function postToCloud() {
@@ -581,8 +594,8 @@ export default function App() {
             <FlipButton onClick={() => startCamera()} aria-label="Retake">
               <FontAwesomeIcon icon={faRotateLeft} />
             </FlipButton>
-            <FlipButton onClick={download} disabled={busy} aria-label="Download">
-              <FontAwesomeIcon icon={faDownload} />
+            <FlipButton onClick={share} disabled={busy} aria-label="Share">
+              <FontAwesomeIcon icon={faArrowUpFromBracket} />
             </FlipButton>
             <FlipButton onClick={postToCloud} disabled={busy} aria-label="Share to Cloud">
               <FontAwesomeIcon icon={faCloudArrowUp} />

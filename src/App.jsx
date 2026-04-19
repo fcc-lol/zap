@@ -451,7 +451,6 @@ export default function App() {
         ctx.globalCompositeOperation = "overlay";
         ctx.fillText(text, pad, y);
         ctx.fillText(text, pad, y);
-        ctx.fillText(text, pad, y);
         ctx.restore();
       });
     }

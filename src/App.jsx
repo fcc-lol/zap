@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import styled from "styled-components";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCameraRotate, faRotateLeft, faDownload } from "@fortawesome/free-solid-svg-icons";
+import {
+  faCameraRotate,
+  faRotateLeft,
+  faDownload,
+  faCloudArrowUp
+} from "@fortawesome/free-solid-svg-icons";
 
 const Page = styled.div`
   height: 100dvh;
@@ -205,49 +210,6 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawTile(ctx, x, y, w, h, label, value, baseW) {
-  const radius = w * 0.12;
-
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.4)";
-  ctx.shadowBlur = baseW * 0.015;
-  ctx.shadowOffsetY = baseW * 0.004;
-  ctx.fillStyle = "rgba(15,18,22,0.72)";
-  roundRect(ctx, x, y, w, h, radius);
-  ctx.fill();
-  ctx.restore();
-
-  ctx.strokeStyle = "rgba(255,255,255,0.16)";
-  ctx.lineWidth = Math.max(1, baseW * 0.002);
-  roundRect(ctx, x, y, w, h, radius);
-  ctx.stroke();
-
-  // Equal padding on all four sides
-  const pad = Math.min(w, h) * 0.12;
-
-  // Label (small, top-left)
-  const labelSize = Math.round(baseW * 0.022);
-  ctx.font = `500 ${labelSize}px -apple-system, "Segoe UI", sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.6)";
-  ctx.textBaseline = "top";
-  ctx.textAlign = "left";
-  ctx.fillText(label.toUpperCase(), x + pad, y + pad);
-
-  // Value (large, bottom-left). Auto-shrink to fit remaining tile width.
-  const maxValueSize = Math.round(baseW * 0.055);
-  const minValueSize = Math.round(baseW * 0.028);
-  const maxWidth = w - pad * 2;
-  let vSize = maxValueSize;
-  ctx.textBaseline = "alphabetic";
-  while (vSize > minValueSize) {
-    ctx.font = `700 ${vSize}px -apple-system, "Segoe UI", sans-serif`;
-    if (ctx.measureText(value).width <= maxWidth) break;
-    vSize -= 2;
-  }
-  ctx.fillStyle = "white";
-  ctx.fillText(value, x + pad, y + h - pad);
-}
-
 const GEO_ERRORS = { 1: "PERMISSION_DENIED", 2: "POSITION_UNAVAILABLE", 3: "TIMEOUT" };
 
 const IS_MOBILE =
@@ -289,6 +251,7 @@ export default function App() {
   const [photoDataUrl, setPhotoDataUrl] = useState(null);
   const [weather, setWeather] = useState(null);
   const [emojis, setEmojis] = useState([]);
+  const [words, setWords] = useState([]);
   const photoImgRef = useRef(null);
   const abortRef = useRef(null);
   const [videoReady, setVideoReady] = useState(false);
@@ -366,6 +329,7 @@ export default function App() {
     setBusy(true);
     setWeather(null);
     setEmojis([]);
+    setWords([]);
 
     const vw = video.videoWidth || 1080;
     const vh = video.videoHeight || 1080;
@@ -438,6 +402,7 @@ export default function App() {
 
     setWeather(weatherData);
     setEmojis(emojisRes.emojis || []);
+    setWords(emojisRes.words || []);
 
     const notes = [];
     if (weatherData?.error) notes.push(`Weather unavailable: ${weatherData.error}`);
@@ -454,55 +419,80 @@ export default function App() {
     canvas.height = img.naturalHeight;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    drawOverlay(ctx, canvas, weather, emojis);
+    drawOverlay(ctx, canvas, weather, emojis, words);
   }
 
-  function drawOverlay(ctx, canvas, weather, emojis) {
+  function drawOverlay(ctx, canvas, weather, emojis, words) {
     const w = canvas.width;
-    const h = canvas.height;
+    const monoStack = `ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+    const pad = Math.round(w * 0.05);
 
-    // Weather grid (top-left): 3 tiles — temp, condition, location
-    if (weather && !weather.error && weather.condition) {
-      const margin = w * 0.04;
-      const gap = w * 0.02;
-      const cellW = (w - margin * 2 - gap * 2) / 3;
-      const cellH = cellW * 0.9;
-      const y = margin;
+    const fontSize = Math.round(w * 0.04);
+    const lineHeight = Math.round(fontSize * 1.4);
 
-      const cells = [
-        { label: "Temp", value: `${Math.round(weather.temp_f)}°` },
-        { label: "Weather", value: weather.condition },
-        { label: "Place", value: weather.location }
-      ];
-
-      cells.forEach((cell, i) => {
-        const x = margin + i * (cellW + gap);
-        drawTile(ctx, x, y, cellW, cellH, cell.label, cell.value, w);
+    function drawStackedText(lines, anchor) {
+      ctx.textAlign = "left";
+      ctx.textBaseline = anchor === "top" ? "top" : "alphabetic";
+      ctx.fillStyle = "white";
+      lines.forEach((raw, i) => {
+        const text = String(raw).toLowerCase();
+        let size = fontSize;
+        ctx.font = `700 ${size}px ${monoStack}`;
+        const maxWidth = w * 0.55;
+        while (size > w * 0.028 && ctx.measureText(text).width > maxWidth) {
+          size -= 2;
+          ctx.font = `700 ${size}px ${monoStack}`;
+        }
+        const y =
+          anchor === "top"
+            ? pad + i * lineHeight
+            : canvas.height - pad - (lines.length - 1 - i) * lineHeight;
+        ctx.save();
+        ctx.globalCompositeOperation = "overlay";
+        ctx.fillText(text, pad, y);
+        ctx.fillText(text, pad, y);
+        ctx.fillText(text, pad, y);
+        ctx.restore();
       });
     }
 
-    // 3 emoji stickers scattered along the bottom
-    if (emojis.length) {
-      const size = Math.round(w * 0.2);
-      ctx.font = `${size}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji`;
-      ctx.textBaseline = "alphabetic";
-      ctx.textAlign = "center";
+    // Top-left: weather stack (lowercased)
+    const weatherLines = [];
+    if (weather && !weather.error && weather.condition) {
+      weatherLines.push(`${Math.round(weather.temp_f)}°`);
+      weatherLines.push(weather.condition);
+      weatherLines.push(weather.location);
+      if (typeof weather.lat === "number" && typeof weather.lon === "number") {
+        weatherLines.push(`${weather.lat.toFixed(2)}°, ${weather.lon.toFixed(2)}°`);
+      }
+    }
+    if (weatherLines.length) drawStackedText(weatherLines, "top");
 
-      const positions = [
-        { x: w * 0.2, y: h * 0.88, rot: -0.12 },
-        { x: w * 0.5, y: h * 0.94, rot: 0.04 },
-        { x: w * 0.8, y: h * 0.86, rot: 0.14 }
-      ];
+    // Bottom-left: AI-generated descriptor words
+    if (words?.length) drawStackedText(words, "bottom");
+
+    // Top-right: emoji row
+    if (emojis?.length) {
+      const emojiSize = Math.round(w * 0.08);
+      const gap = Math.round(w * 0.012);
+      ctx.font = `${emojiSize}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji`;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+
+      const metrics = ctx.measureText(emojis[0]);
+      const ascent = metrics.actualBoundingBoxAscent || emojiSize * 0.9;
+      const glyphW = emojiSize;
+      const totalW = emojis.length * glyphW + (emojis.length - 1) * gap;
+      const startX = w - pad - totalW;
+      const baselineY = pad + ascent;
 
       emojis.forEach((emoji, i) => {
-        const p = positions[i] || positions[0];
+        const x = startX + i * (glyphW + gap);
         ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(p.rot);
         ctx.shadowColor = "rgba(0,0,0,0.5)";
         ctx.shadowBlur = w * 0.015;
         ctx.shadowOffsetY = w * 0.005;
-        ctx.fillText(emoji, 0, 0);
+        ctx.fillText(emoji, x, baselineY);
         ctx.restore();
       });
 
@@ -517,6 +507,30 @@ export default function App() {
     link.download = `zap-${Date.now()}.jpg`;
     link.href = canvas.toDataURL("image/jpeg", 0.92);
     link.click();
+  }
+
+  async function postToCloud() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const isLocal = window.location.hostname === "localhost";
+    const cloudApi = isLocal ? "http://localhost:3127" : "https://cloud.leo.gd";
+    const cloudApp = isLocal ? "http://localhost:5174" : "https://cloud.leo.gd";
+    const win = window.open(cloudApp, "_blank");
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.92));
+    if (!blob) return;
+    const form = new FormData();
+    form.append("image", blob, "zap.jpg");
+    try {
+      const res = await fetch(`${cloudApi}/api/prefill-media`, {
+        method: "POST",
+        body: form
+      });
+      const { filename } = await res.json();
+      const url = `${cloudApp}/?compose=${filename}&source=zap`;
+      if (win) win.location = url;
+    } catch (e) {
+      console.warn("Post to Cloud failed:", e);
+    }
   }
 
   return (
@@ -557,6 +571,9 @@ export default function App() {
             </FlipButton>
             <FlipButton onClick={download} disabled={busy} aria-label="Download">
               <FontAwesomeIcon icon={faDownload} />
+            </FlipButton>
+            <FlipButton onClick={postToCloud} disabled={busy} aria-label="Share to Cloud">
+              <FontAwesomeIcon icon={faCloudArrowUp} />
             </FlipButton>
           </ShutterRow>
         )}

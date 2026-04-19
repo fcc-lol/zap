@@ -39,7 +39,7 @@ app.post("/api/query", (req, res) => {
   }
 });
 
-// 3 emojis from Claude vision, given a base64 image
+// 3 emojis + 3 words from Claude vision, given a base64 image
 app.post("/api/emojis", async (req, res) => {
   try {
     const { imageBase64, mediaType = "image/jpeg" } = req.body || {};
@@ -49,7 +49,7 @@ app.post("/api/emojis", async (req, res) => {
 
     const result = await anthropic.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 60,
+      max_tokens: 150,
       messages: [
         {
           role: "user",
@@ -60,7 +60,7 @@ app.post("/api/emojis", async (req, res) => {
             },
             {
               type: "text",
-              text: "Pick exactly 3 emojis that best capture the mood, subjects, and setting of this photo. Reply with only the 3 emojis concatenated, no spaces, no punctuation, no other text."
+              text: 'Look at this photo. Pick exactly 3 emojis and 3 single lowercase words that best capture its mood, subjects, and setting. Reply with ONLY a JSON object in this exact shape, no prose, no code fences: {"emojis":"XXX","words":["a","b","c"]} where XXX is the 3 emojis concatenated with no spaces.'
             }
           ]
         }
@@ -68,13 +68,26 @@ app.post("/api/emojis", async (req, res) => {
     });
 
     const raw = (result.content?.[0]?.text || "").trim();
+    let parsed;
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : raw);
+    } catch (e) {
+      console.error("/api/emojis parse error; raw:", raw);
+      return res.status(502).json({ error: "could not parse model response", raw });
+    }
+
     const segmenter = new Intl.Segmenter("en", { granularity: "grapheme" });
-    const emojis = [...segmenter.segment(raw)]
+    const emojis = [...segmenter.segment(String(parsed.emojis || ""))]
       .map((s) => s.segment)
       .filter((s) => s.trim() && !/^[a-z0-9.,!?'"`\-]+$/i.test(s))
       .slice(0, 3);
 
-    res.json({ emojis });
+    const words = Array.isArray(parsed.words)
+      ? parsed.words.map((w) => String(w).trim()).filter(Boolean).slice(0, 3)
+      : [];
+
+    res.json({ emojis, words });
   } catch (error) {
     console.error("/api/emojis failed:", error);
     res.status(500).json({ error: error.message });
@@ -115,7 +128,9 @@ app.get("/api/weather", async (req, res) => {
       condition: data.current.condition.text,
       location: data.location.name,
       region: data.location.region,
-      icon: data.current.condition.icon
+      icon: data.current.condition.icon,
+      lat: data.location.lat,
+      lon: data.location.lon
     });
   } catch (error) {
     console.error("/api/weather failed:", error);

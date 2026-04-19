@@ -1,0 +1,10 @@
+{
+  "app_id": "zap",
+  "app_name": "Zap",
+  "domain": "https://zap.fcc.lol",
+  "host": "localhost",
+  "port": "3116",
+  "author": "fcc",
+  "anthropic": true,
+  "created_on": "Sun Apr 19 20:44:54 UTC 2026"
+}

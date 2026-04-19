@@ -10,7 +10,7 @@ import {
 
 const Page = styled.div`
   height: 100dvh;
-  background: #0f1216;
+  background: #000000;
   color: #f4f6fa;
   display: flex;
   flex-direction: column;

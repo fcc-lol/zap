@@ -48,7 +48,7 @@ app.post("/api/emojis", async (req, res) => {
     }
 
     const result = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-haiku-4-5",
       max_tokens: 150,
       messages: [
         {
@@ -90,6 +90,81 @@ app.post("/api/emojis", async (req, res) => {
     res.json({ emojis, words });
   } catch (error) {
     console.error("/api/emojis failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Reverse geocode lat/lon → street-level address via OpenStreetMap Nominatim
+app.get("/api/reverse-geocode", async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) return res.status(400).json({ error: "lat and lon required" });
+
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=18&addressdetails=1`;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "zap.fcc.lol (leo@leomancinidesign.com)" }
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      return res.status(r.status).json({ error: text });
+    }
+    const data = await r.json();
+    const a = data.address || {};
+    const address = [a.house_number, a.road].filter(Boolean).join(" ");
+
+    // Nominatim sometimes skips `neighbourhood` and only fills `suburb` (which is
+    // the borough in NYC). Parse the display_name tokens between the road and the
+    // suburb/city to find the real neighborhood (e.g. "Williamsburg").
+    let neighborhood = a.neighbourhood || a.quarter || a.hamlet || "";
+    if (!neighborhood) {
+      const tokens = String(data.display_name || "")
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const roadIdx = a.road ? tokens.indexOf(a.road) : -1;
+      const excluded = new Set(
+        [
+          a.house_number,
+          a.road,
+          a.suburb,
+          a.city,
+          a.town,
+          a.village,
+          a.municipality,
+          a.borough,
+          a.county,
+          a.state_district,
+          a.state,
+          a.postcode,
+          a.country,
+          a.country_code
+        ]
+          .filter(Boolean)
+          .map(String)
+      );
+      if (roadIdx >= 0 && roadIdx + 1 < tokens.length) {
+        const candidate = tokens[roadIdx + 1];
+        if (candidate && !excluded.has(candidate)) neighborhood = candidate;
+      }
+      if (!neighborhood) neighborhood = a.suburb || "";
+    }
+
+    const city = a.city || a.town || a.village || a.municipality || "";
+    const state = a.state || "";
+    const country = a.country || "";
+    const lower = (s) => (s || "").toLowerCase();
+    const cityLower = lower(city);
+    const cityDisplay = cityLower === "new york" ? "new york city" : cityLower;
+    res.json({
+      address: lower(address),
+      neighborhood: lower(neighborhood),
+      city: cityDisplay,
+      state: lower(state),
+      country: lower(country),
+      raw: data.display_name
+    });
+  } catch (error) {
+    console.error("/api/reverse-geocode failed:", error);
     res.status(500).json({ error: error.message });
   }
 });

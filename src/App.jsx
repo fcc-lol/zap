@@ -235,7 +235,7 @@ function getLocation() {
         console.warn("[geolocation] error:", label, e.message, e);
         reject(new Error(`${label}${e.message ? ": " + e.message : ""}`));
       },
-      { timeout: 15000, maximumAge: 5 * 60_000, enableHighAccuracy: false }
+      { timeout: 15000, maximumAge: 5 * 60_000, enableHighAccuracy: true }
     );
   });
 }
@@ -257,6 +257,8 @@ export default function App() {
   const [weather, setWeather] = useState(null);
   const [emojis, setEmojis] = useState([]);
   const [words, setWords] = useState([]);
+  const [captureTime, setCaptureTime] = useState(null);
+  const [geo, setGeo] = useState(null);
   const photoImgRef = useRef(null);
   const abortRef = useRef(null);
   const [videoReady, setVideoReady] = useState(false);
@@ -337,6 +339,8 @@ export default function App() {
     setWeather(null);
     setEmojis([]);
     setWords([]);
+    setCaptureTime(null);
+    setGeo(null);
     setPhotoDataUrl(null);
     const live = streamRef.current?.getTracks().some((t) => t.readyState === "live");
     if (live) {
@@ -360,6 +364,8 @@ export default function App() {
     setWeather(null);
     setEmojis([]);
     setWords([]);
+    setCaptureTime(null);
+    setGeo(null);
 
     const vw = video.videoWidth || 1080;
     const vh = video.videoHeight || 1080;
@@ -384,17 +390,22 @@ export default function App() {
 
     setPhotoDataUrl(jpeg);
     setMode("preview");
+    const takenAt = new Date();
+
+    let coords = null;
+    let geoError = null;
+    try {
+      coords = await getLocation();
+    } catch (e) {
+      geoError = e;
+      console.warn("[geo] unavailable, falling back to IP for weather:", e.message);
+    }
+
+    const hiLat = coords ? coords.lat.toFixed(7) : null;
+    const hiLon = coords ? coords.lon.toFixed(7) : null;
 
     const weatherP = (async () => {
-      let query = "";
-      let geoError = null;
-      try {
-        const { lat, lon } = await getLocation();
-        query = `?lat=${lat}&lon=${lon}`;
-      } catch (e) {
-        geoError = e;
-        console.warn("[weather] geolocation unavailable, falling back to server IP lookup:", e.message);
-      }
+      const query = coords ? `?lat=${hiLat}&lon=${hiLon}` : "";
       try {
         const url = `/api/weather${query}`;
         console.log("[weather] fetching:", url);
@@ -413,6 +424,22 @@ export default function App() {
       }
     })();
 
+    const reverseP = (async () => {
+      if (!coords) return null;
+      try {
+        const r = await fetch(
+          `/api/reverse-geocode?lat=${hiLat}&lon=${hiLon}`,
+          { signal }
+        );
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `reverse ${r.status}`);
+        return data;
+      } catch (e) {
+        if (e.name !== "AbortError") console.warn("[reverse] failed", e);
+        return null;
+      }
+    })();
+
     const emojisP = fetch("/api/emojis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -425,13 +452,19 @@ export default function App() {
         return { emojis: [], error: e.message };
       });
 
-    const [weatherData, emojisRes] = await Promise.all([weatherP, emojisP]);
+    const [weatherData, reverseData, emojisRes] = await Promise.all([
+      weatherP,
+      reverseP,
+      emojisP
+    ]);
 
     if (signal.aborted) return;
 
     setWeather(weatherData);
     setEmojis(emojisRes.emojis || []);
     setWords(emojisRes.words || []);
+    setGeo(reverseData);
+    setCaptureTime(takenAt);
 
     const notes = [];
     if (weatherData?.error) notes.push(`Weather unavailable: ${weatherData.error}`);
@@ -448,80 +481,95 @@ export default function App() {
     canvas.height = img.naturalHeight;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    drawOverlay(ctx, canvas, weather, emojis, words);
+    drawOverlay(ctx, canvas, weather, emojis, words, captureTime, geo);
   }
 
-  function drawOverlay(ctx, canvas, weather, emojis, words) {
+  function drawOverlay(ctx, canvas, weather, emojis, words, captureTime, geo) {
     const w = canvas.width;
     const monoStack = `ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
     const pad = Math.round(w * 0.05);
 
-    const fontSize = Math.round(w * 0.04);
+    const fontSize = Math.round(w * 0.034);
     const lineHeight = Math.round(fontSize * 1.4);
 
     function drawStackedText(lines, anchor) {
       ctx.textAlign = "left";
       ctx.textBaseline = anchor === "top" ? "top" : "alphabetic";
       ctx.fillStyle = "white";
+      const size = fontSize;
+      ctx.font = `700 ${size}px ${monoStack}`;
       lines.forEach((raw, i) => {
         const text = String(raw).toLowerCase();
-        let size = fontSize;
-        ctx.font = `700 ${size}px ${monoStack}`;
-        const maxWidth = w * 0.55;
-        while (size > w * 0.028 && ctx.measureText(text).width > maxWidth) {
-          size -= 2;
-          ctx.font = `700 ${size}px ${monoStack}`;
-        }
         const y =
           anchor === "top"
             ? pad + i * lineHeight
             : canvas.height - pad - (lines.length - 1 - i) * lineHeight;
         ctx.save();
+        ctx.lineJoin = "round";
+        ctx.miterLimit = 2;
+        ctx.lineWidth = Math.max(2, size * 0.18);
         ctx.globalCompositeOperation = "overlay";
-        ctx.fillText(text, pad, y);
+        ctx.strokeStyle = "black";
+        ctx.strokeText(text, pad, y);
+        ctx.globalCompositeOperation = "source-over";
+        ctx.fillStyle = "white";
         ctx.fillText(text, pad, y);
         ctx.restore();
       });
     }
 
-    // Top-left: weather stack (lowercased)
-    const weatherLines = [];
+    // Top-left: ordered info stack (lowercased)
+    const lines = [];
+    if (captureTime instanceof Date && !isNaN(captureTime)) {
+      lines.push(
+        captureTime.toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric"
+        })
+      );
+      lines.push(
+        captureTime.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit"
+        })
+      );
+    }
     if (weather && !weather.error && weather.condition) {
-      weatherLines.push(`${Math.round(weather.temp_f)}°`);
-      weatherLines.push(weather.condition);
-      weatherLines.push(weather.location);
+      lines.push(`${Math.round(weather.temp_f)}°`);
+      lines.push(weather.condition);
       if (typeof weather.lat === "number" && typeof weather.lon === "number") {
-        weatherLines.push(`${weather.lat.toFixed(2)}°, ${weather.lon.toFixed(2)}°`);
+        lines.push(`${weather.lat.toFixed(2)}°, ${weather.lon.toFixed(2)}°`);
       }
     }
-    if (weatherLines.length) drawStackedText(weatherLines, "top");
+    if (geo) {
+      if (geo.address) lines.push(geo.address);
+      if (geo.neighborhood) lines.push(geo.neighborhood);
+      if (geo.city) lines.push(geo.city);
+      if (geo.state) lines.push(geo.state);
+      if (geo.country && geo.country !== "united states") lines.push(geo.country);
+    }
+    if (lines.length) drawStackedText(lines, "top");
 
     // Bottom-left: AI-generated descriptor words
     if (words?.length) drawStackedText(words, "bottom");
 
     // Top-right: emoji row
     if (emojis?.length) {
-      const emojiSize = Math.round(w * 0.08);
-      const gap = Math.round(w * 0.012);
+      const emojiSize = Math.round(w * 0.06);
+      const gap = Math.round(w * 0.035);
       ctx.font = `${emojiSize}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", emoji`;
       ctx.textAlign = "left";
-      ctx.textBaseline = "alphabetic";
+      ctx.textBaseline = "top";
 
-      const metrics = ctx.measureText(emojis[0]);
-      const ascent = metrics.actualBoundingBoxAscent || emojiSize * 0.9;
       const glyphW = emojiSize;
       const totalW = emojis.length * glyphW + (emojis.length - 1) * gap;
       const startX = w - pad - totalW;
-      const baselineY = pad + ascent;
+      const topY = pad;
 
       emojis.forEach((emoji, i) => {
         const x = startX + i * (glyphW + gap);
-        ctx.save();
-        ctx.shadowColor = "rgba(0,0,0,0.5)";
-        ctx.shadowBlur = w * 0.015;
-        ctx.shadowOffsetY = w * 0.005;
-        ctx.fillText(emoji, x, baselineY);
-        ctx.restore();
+        ctx.fillText(emoji, x, topY);
       });
 
       ctx.textAlign = "start";

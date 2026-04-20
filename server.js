@@ -190,13 +190,14 @@ app.get("/api/weather", async (req, res) => {
       q = isLocal ? "auto:ip" : ip;
     }
 
-    const url = `https://api.weatherapi.com/v1/current.json?key=${key}&q=${encodeURIComponent(q)}&aqi=no`;
+    const url = `https://api.weatherapi.com/v1/forecast.json?key=${key}&q=${encodeURIComponent(q)}&days=1&aqi=no&alerts=no`;
     const r = await fetch(url);
     if (!r.ok) {
       const text = await r.text();
       return res.status(r.status).json({ error: text });
     }
     const data = await r.json();
+    const astro = data.forecast?.forecastday?.[0]?.astro || {};
     res.json({
       temp_f: data.current.temp_f,
       temp_c: data.current.temp_c,
@@ -205,10 +206,36 @@ app.get("/api/weather", async (req, res) => {
       region: data.location.region,
       icon: data.current.condition.icon,
       lat: data.location.lat,
-      lon: data.location.lon
+      lon: data.location.lon,
+      humidity: data.current.humidity,
+      wind_mph: data.current.wind_mph,
+      wind_dir: data.current.wind_dir,
+      sunrise: astro.sunrise,
+      sunset: astro.sunset
     });
   } catch (error) {
     console.error("/api/weather failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Elevation via open-elevation (free, no key)
+app.get("/api/elevation", async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) return res.status(400).json({ error: "lat and lon required" });
+    const r = await fetch(
+      `https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lon}`,
+      { headers: { Accept: "application/json" } }
+    );
+    if (!r.ok) {
+      return res.status(r.status).json({ error: await r.text() });
+    }
+    const data = await r.json();
+    const elevation_m = data.results?.[0]?.elevation;
+    res.json({ elevation_m });
+  } catch (error) {
+    console.error("/api/elevation failed:", error);
     res.status(500).json({ error: error.message });
   }
 });

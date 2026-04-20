@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import styled from "styled-components";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { dominantColors } from "./colors";
 import {
   faCameraRotate,
   faRotateLeft,
@@ -240,6 +241,106 @@ function getLocation() {
   });
 }
 
+const CARDINALS = [
+  "n", "nne", "ne", "ene", "e", "ese", "se", "sse",
+  "s", "ssw", "sw", "wsw", "w", "wnw", "nw", "nnw"
+];
+function cardinalDir(deg) {
+  if (typeof deg !== "number" || Number.isNaN(deg)) return null;
+  const i = Math.round(((deg % 360) + 360) % 360 / 22.5) % 16;
+  return CARDINALS[i];
+}
+
+async function getCompassHeading() {
+  if (typeof window === "undefined" || typeof DeviceOrientationEvent === "undefined") return null;
+  // iOS requires explicit permission from a user gesture (shutter press qualifies)
+  if (typeof DeviceOrientationEvent.requestPermission === "function") {
+    try {
+      const state = await DeviceOrientationEvent.requestPermission();
+      if (state !== "granted") return null;
+    } catch {
+      return null;
+    }
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const handler = (e) => {
+      let heading = e.webkitCompassHeading;
+      if (typeof heading !== "number") {
+        // alpha is rotation around z-axis; invert because alpha=0 points to phone's top
+        heading = typeof e.alpha === "number" ? (360 - e.alpha) % 360 : null;
+      }
+      if (heading == null) return;
+      if (!settled) {
+        settled = true;
+        window.removeEventListener("deviceorientation", handler);
+        resolve(heading);
+      }
+    };
+    window.addEventListener("deviceorientation", handler);
+    setTimeout(() => {
+      if (!settled) {
+        window.removeEventListener("deviceorientation", handler);
+        resolve(null);
+      }
+    }, 1500);
+  });
+}
+
+function getSeason(date, lat) {
+  if (!(date instanceof Date) || typeof lat !== "number") return null;
+  const m = date.getMonth();
+  const d = date.getDate();
+  let n;
+  if (m < 2 || (m === 2 && d < 20)) n = "winter";
+  else if (m < 5 || (m === 5 && d < 21)) n = "spring";
+  else if (m < 8 || (m === 8 && d < 22)) n = "summer";
+  else if (m < 11 || (m === 11 && d < 21)) n = "autumn";
+  else n = "winter";
+  if (lat < 0) {
+    const flip = { winter: "summer", summer: "winter", spring: "autumn", autumn: "spring" };
+    return flip[n];
+  }
+  return n;
+}
+
+function parseTimeToday(t, refDate) {
+  // weatherapi format e.g. "06:34 AM"
+  if (!t) return null;
+  const parts = t.trim().split(/\s+/);
+  const [hStr, mStr] = parts[0].split(":");
+  let h = parseInt(hStr, 10);
+  const m = parseInt(mStr, 10);
+  const ap = (parts[1] || "").toUpperCase();
+  if (ap === "PM" && h !== 12) h += 12;
+  if (ap === "AM" && h === 12) h = 0;
+  const d = new Date(refDate);
+  d.setHours(h, m, 0, 0);
+  return d;
+}
+
+function timeToSun(captureTime, sunrise, sunset) {
+  const sr = parseTimeToday(sunrise, captureTime);
+  const ss = parseTimeToday(sunset, captureTime);
+  if (!sr || !ss) return null;
+  let target, label;
+  if (captureTime < sr) {
+    target = sr;
+    label = "sunrise";
+  } else if (captureTime < ss) {
+    target = ss;
+    label = "sunset";
+  } else {
+    target = new Date(sr);
+    target.setDate(target.getDate() + 1);
+    label = "sunrise";
+  }
+  const mins = Math.max(0, Math.round((target - captureTime) / 60000));
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${h}h ${m}m to ${label}`;
+}
+
 const isIOS = typeof navigator !== "undefined" &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
@@ -259,6 +360,8 @@ export default function App() {
   const [words, setWords] = useState([]);
   const [captureTime, setCaptureTime] = useState(null);
   const [geo, setGeo] = useState(null);
+  const [elevation, setElevation] = useState(null);
+  const [colors, setColors] = useState([]);
   const photoImgRef = useRef(null);
   const abortRef = useRef(null);
   const [videoReady, setVideoReady] = useState(false);
@@ -341,6 +444,8 @@ export default function App() {
     setWords([]);
     setCaptureTime(null);
     setGeo(null);
+    setElevation(null);
+    setColors([]);
     setPhotoDataUrl(null);
     const live = streamRef.current?.getTracks().some((t) => t.readyState === "live");
     if (live) {
@@ -366,6 +471,8 @@ export default function App() {
     setWords([]);
     setCaptureTime(null);
     setGeo(null);
+    setElevation(null);
+    setColors([]);
 
     const vw = video.videoWidth || 1080;
     const vh = video.videoHeight || 1080;
@@ -452,11 +559,33 @@ export default function App() {
         return { emojis: [], error: e.message };
       });
 
-    const [weatherData, reverseData, emojisRes] = await Promise.all([
-      weatherP,
-      reverseP,
-      emojisP
-    ]);
+    const elevationP = (async () => {
+      if (!coords) return null;
+      try {
+        const r = await fetch(
+          `/api/elevation?lat=${hiLat}&lon=${hiLon}`,
+          { signal }
+        );
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `elevation ${r.status}`);
+        return typeof data.elevation_m === "number" ? data.elevation_m : null;
+      } catch (e) {
+        if (e.name !== "AbortError") console.warn("[elevation] failed", e);
+        return null;
+      }
+    })();
+
+    const dominantP = Promise.resolve().then(() => {
+      try {
+        return dominantColors(canvas, 2);
+      } catch (e) {
+        console.warn("[colors] failed", e);
+        return [];
+      }
+    });
+
+    const [weatherData, reverseData, emojisRes, elevationM, colorNames] =
+      await Promise.all([weatherP, reverseP, emojisP, elevationP, dominantP]);
 
     if (signal.aborted) return;
 
@@ -464,6 +593,8 @@ export default function App() {
     setEmojis(emojisRes.emojis || []);
     setWords(emojisRes.words || []);
     setGeo(reverseData);
+    setElevation(elevationM);
+    setColors(colorNames);
     setCaptureTime(takenAt);
 
     const notes = [];
@@ -481,29 +612,31 @@ export default function App() {
     canvas.height = img.naturalHeight;
     const ctx = canvas.getContext("2d");
     ctx.drawImage(img, 0, 0);
-    drawOverlay(ctx, canvas, weather, emojis, words, captureTime, geo);
+    drawOverlay(ctx, canvas, weather, emojis, words, captureTime, geo, {
+      elevation,
+      colors
+    });
   }
 
-  function drawOverlay(ctx, canvas, weather, emojis, words, captureTime, geo) {
+  function drawOverlay(ctx, canvas, weather, emojis, words, captureTime, geo, extras) {
     const w = canvas.width;
     const monoStack = `ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
     const pad = Math.round(w * 0.05);
 
-    const fontSize = Math.round(w * 0.034);
-    const lineHeight = Math.round(fontSize * 1.4);
+    const fontSize = Math.round(w * 0.03);
 
-    function drawStackedText(lines, anchor) {
+    function drawStackedText(lines) {
+      if (!lines.length) return;
       ctx.textAlign = "left";
-      ctx.textBaseline = anchor === "top" ? "top" : "alphabetic";
+      ctx.textBaseline = "top";
       ctx.fillStyle = "white";
       const size = fontSize;
       ctx.font = `700 ${size}px ${monoStack}`;
+      const available = canvas.height - 2 * pad - size;
+      const step = lines.length > 1 ? available / (lines.length - 1) : 0;
       lines.forEach((raw, i) => {
         const text = String(raw).toLowerCase();
-        const y =
-          anchor === "top"
-            ? pad + i * lineHeight
-            : canvas.height - pad - (lines.length - 1 - i) * lineHeight;
+        const y = pad + i * step;
         ctx.save();
         ctx.lineJoin = "round";
         ctx.miterLimit = 2;
@@ -518,7 +651,7 @@ export default function App() {
       });
     }
 
-    // Top-left: ordered info stack (lowercased)
+    // Unified left-column stack (lowercased)
     const lines = [];
     if (captureTime instanceof Date && !isNaN(captureTime)) {
       lines.push(
@@ -535,12 +668,28 @@ export default function App() {
         })
       );
     }
-    if (weather && !weather.error && weather.condition) {
+    const hasWeather = weather && !weather.error && weather.condition;
+    if (hasWeather) {
       lines.push(`${Math.round(weather.temp_f)}°`);
       lines.push(weather.condition);
-      if (typeof weather.lat === "number" && typeof weather.lon === "number") {
-        lines.push(`${weather.lat.toFixed(2)}°, ${weather.lon.toFixed(2)}°`);
+      if (typeof weather.humidity === "number") {
+        lines.push(`${weather.humidity}% humidity`);
       }
+      if (typeof weather.wind_mph === "number" && weather.wind_dir) {
+        lines.push(`wind ${Math.round(weather.wind_mph)} mph ${weather.wind_dir.toLowerCase()}`);
+      }
+    }
+    if (typeof extras?.elevation === "number") {
+      lines.push(`${Math.round(extras.elevation * 3.28084)}ft elevation`);
+    }
+    if (hasWeather) {
+      const sun = timeToSun(captureTime, weather.sunrise, weather.sunset);
+      if (sun) lines.push(sun);
+      const season = getSeason(captureTime, weather.lat);
+      if (season) lines.push(season);
+    }
+    if (weather && typeof weather.lat === "number" && typeof weather.lon === "number") {
+      lines.push(`${weather.lat.toFixed(2)}°, ${weather.lon.toFixed(2)}°`);
     }
     if (geo) {
       if (geo.address) lines.push(geo.address);
@@ -549,10 +698,9 @@ export default function App() {
       if (geo.state) lines.push(geo.state);
       if (geo.country && geo.country !== "united states") lines.push(geo.country);
     }
-    if (lines.length) drawStackedText(lines, "top");
-
-    // Bottom-left: AI-generated descriptor words
-    if (words?.length) drawStackedText(words, "bottom");
+    if (extras?.colors?.length) lines.push(...extras.colors.slice(0, 2));
+    if (words?.length) lines.push(...words);
+    drawStackedText(lines);
 
     // Top-right: emoji row
     if (emojis?.length) {

@@ -556,7 +556,7 @@ export default function App() {
     const isLocal = window.location.hostname === "localhost";
     const cloudApi = isLocal ? "http://localhost:3127" : "https://cloud.leo.gd";
     const cloudApp = isLocal ? "http://localhost:5174" : "https://cloud.leo.gd";
-    const win = window.open("about:blank", "_blank");
+    const win = window.open(`${cloudApp}/?awaitContent=zap&width=${canvas.width}&height=${canvas.height}`, "_blank");
     const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.92));
     if (!blob) return;
     const form = new FormData();
@@ -567,8 +567,14 @@ export default function App() {
         body: form
       });
       const { filename } = await res.json();
-      const url = `${cloudApp}/?compose=${filename}&source=zap&width=${canvas.width}&height=${canvas.height}`;
-      if (win) win.location = url;
+      if (win) {
+        const send = () => win.postMessage({ type: "prefill-ready", filename }, "*");
+        send();
+        const retry = setInterval(send, 500);
+        const onAck = (e) => { if (e.data?.type === "prefill-ack") { clearInterval(retry); window.removeEventListener("message", onAck); } };
+        window.addEventListener("message", onAck);
+        setTimeout(() => { clearInterval(retry); window.removeEventListener("message", onAck); }, 30000);
+      }
     } catch (e) {
       console.warn("Post to Cloud failed:", e);
     }

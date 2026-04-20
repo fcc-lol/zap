@@ -556,7 +556,7 @@ export default function App() {
     const isLocal = window.location.hostname === "localhost";
     const cloudApi = isLocal ? "http://localhost:3127" : "https://cloud.leo.gd";
     const cloudApp = isLocal ? "http://localhost:5174" : "https://cloud.leo.gd";
-    const win = window.open(cloudApp, "_blank");
+    const win = window.open("about:blank", "_blank");
     const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.92));
     if (!blob) return;
     const form = new FormData();

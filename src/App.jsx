@@ -567,7 +567,7 @@ export default function App() {
         body: form
       });
       const { filename } = await res.json();
-      const url = `${cloudApp}/?compose=${filename}&source=zap`;
+      const url = `${cloudApp}/?compose=${filename}&source=zap&width=${canvas.width}&height=${canvas.height}`;
       if (win) win.location = url;
     } catch (e) {
       console.warn("Post to Cloud failed:", e);

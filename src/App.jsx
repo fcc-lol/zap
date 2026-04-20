@@ -329,6 +329,23 @@ export default function App() {
     await startCamera(next);
   }
 
+  function retake() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStatus("");
+    setBusy(false);
+    setWeather(null);
+    setEmojis([]);
+    setWords([]);
+    setPhotoDataUrl(null);
+    const live = streamRef.current?.getTracks().some((t) => t.readyState === "live");
+    if (live) {
+      setMode("camera");
+    } else {
+      startCamera();
+    }
+  }
+
   async function capture() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -365,7 +382,6 @@ export default function App() {
     const jpeg = canvas.toDataURL("image/jpeg", 0.85);
     const base64 = jpeg.split(",")[1];
 
-    stopCamera();
     setPhotoDataUrl(jpeg);
     setMode("preview");
 
@@ -591,7 +607,7 @@ export default function App() {
         )}
         {mode === "preview" && (
           <ShutterRow>
-            <FlipButton onClick={() => startCamera()} aria-label="Retake">
+            <FlipButton onClick={retake} aria-label="Retake">
               <FontAwesomeIcon icon={faRotateLeft} />
             </FlipButton>
             <FlipButton onClick={share} disabled={busy} aria-label="Share">
